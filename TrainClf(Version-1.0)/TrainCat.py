@@ -34,11 +34,11 @@ class CatBoostParameters:
         else:
             self.params = {
                 'boosting_type': hyperopt.hp.choice('boosting_type', params_dict['boosting_type']),
-                'iterations': hyperopt.hp.uniformint('iterations', params_dict['iterations']),
-                'learning_rate': hyperopt.hp.uniform('learning_rate', params_dict['learning_rate']),
-                'depth': hyperopt.hp.quniform('depth', params_dict['depth']),
-                'l2_leaf_reg': hyperopt.hp.uniform('l2_leaf_reg', params_dict['l2_leaf_reg']),
-                'min_data_in_leaf': hyperopt.hp.quniform('min_data_in_leaf', params_dict['min_data_in_leaf'])
+                'iterations': hyperopt.hp.uniformint('iterations', *params_dict['iterations']),
+                'learning_rate': hyperopt.hp.uniform('learning_rate', *params_dict['learning_rate']),
+                'depth': hyperopt.hp.quniform('depth', *params_dict['depth']),
+                'l2_leaf_reg': hyperopt.hp.uniform('l2_leaf_reg', *params_dict['l2_leaf_reg']),
+                'min_data_in_leaf': hyperopt.hp.quniform('min_data_in_leaf', *params_dict['min_data_in_leaf'])
             }
 
     def param_transformer(self, params):
