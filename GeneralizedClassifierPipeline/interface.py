@@ -54,3 +54,38 @@ class TrainModel(abc.ABC):
 		pass
 
 # --------------------------------------------------------------------------------------------------------------
+
+class FeatureSelector(abc.ABC):
+
+	"""
+	Feature selector implementstion.
+	"""
+
+	@abc.abstractmethod
+	def __init__(self, **params_dict):
+
+		"""
+		Init samples and other parameters.
+		"""
+
+		pass
+
+	@abc.abstractmethod
+	def get_feature_importance(self):
+
+		"""
+		Return model feature importances.
+		"""
+
+		pass
+
+	@abc.ABC
+	def get_scores(self):
+
+		"""
+		Return model scores.
+		"""
+
+		pass
+
+# --------------------------------------------------------------------------------------------------------------
