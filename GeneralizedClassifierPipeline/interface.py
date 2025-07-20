@@ -15,7 +15,7 @@ class Parameters(abc.ABC):
 	def __init__(self, **params_dict):
 
 		"""
-		Init model parameters
+		Init model parameters.
 		"""
 
 		pass
@@ -24,7 +24,33 @@ class Parameters(abc.ABC):
 	def param_transformer(self, **params_dict):
 
 		"""
-		Transform parameters to valid hyperopt type
+		Transform parameters to valid hyperopt type.
 		"""
+
+# --------------------------------------------------------------------------------------------------------------
+
+class TrainModel(abc.ABC):
+
+	"""
+	Automized model training pipeline.
+	"""
+
+	@abc.abstractmethod
+	def __init__(self, **params_dict):
+
+		"""
+		Init samples and model parameters.
+		"""
+
+		pass
+
+	@abc.abstractmethod
+	def train(self, **params_dict):
+
+		"""
+		Train model implementation.
+		"""
+
+		pass
 
 # --------------------------------------------------------------------------------------------------------------
