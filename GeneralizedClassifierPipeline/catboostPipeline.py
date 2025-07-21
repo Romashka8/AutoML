@@ -22,10 +22,10 @@ import seaborn as sns
 # --------------------------------------------------------------------------------------------------------------
 
 class CatBoostParameters(Parameters):
-
-	"""
-	Setup catboost training parameters.
-	"""
+    
+    """
+    Setup catboost training parameters.
+    """
 
     def __init__(self, params_dict=None):
         
@@ -67,11 +67,11 @@ class CatBoostParameters(Parameters):
 # --------------------------------------------------------------------------------------------------------------
 
 class TrainCatBoostModel(TrainModel):
-
-	"""
-	Implemented catboost training pipeline.
-	"""
-
+	
+    """
+    Implemented catboost training pipeline.
+    """
+    
     def __init__(self, x_train, y_train, x_test, y_test,
                  random_seed=42, early_stop=50, max_evals=10,
                  params_dict=None, cat_features=None):
