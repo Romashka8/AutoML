@@ -66,6 +66,160 @@ class CatBoostParameters(Parameters):
 
 # --------------------------------------------------------------------------------------------------------------
 
+class TrainCatBoostModel(TrainModel):
 
+	"""
+	Implemented catboost training pipeline.
+	"""
+
+    def __init__(self, x_train, y_train, x_test, y_test,
+                 random_seed=42, early_stop=50, max_evals=10,
+                 params_dict=None, cat_features=None):
+
+        self.x_train = x_train
+        self.y_train = y_train
+        self.x_test = x_test
+        self.y_test = y_test
+        self.parameters = CatBoostParameters(params_dict)
+        self.early_stop = early_stop
+        self.model = None
+        self.scoring = None
+        self.type_model = None
+        self.max_evals = max_evals
+        self.cat_features = cat_features
+        self.random_seed = random_seed
+
+    def __plot_feature_importance(self, model, model_name):
+        
+        if isinstance(self.x_train, pd.DataFrame):
+            col_names = self.x_train.columns.values
+        else:
+            col_names = [f'col_{i}' for i in range(self.x_train.shape[1])]
+            
+            feature_imp = pd.DataFrame(
+                sorted(zip(model.feature_importances_, col_names)),
+                columns=['Value', 'Feature']
+            )
+
+            plt.figure(figsize=(10, 10))
+            sns.barplot(x='Value', y='Feature',
+                        data=feature_imp.sort_values(by='Value', ascending=False),
+                        palette='magma'
+            )
+            plt.title(f'{model_name} importance of features')
+
+    def __cat(self, params):
+        
+        params = self.parameters.param_transformer(params)
+        model = CatBoostClassifier(
+            loss_function='Logloss',
+            eval_metric='AUC',
+            random_seed=self.random_seed,
+            max_ctr_complexity=1,
+            cat_features=self.cat_features,
+            **params
+        )
+
+        early_stopping = {
+            'early_stopping_rounds': self.early_stop,
+            'eval_set': (self.x_test, self.y_test),
+            'verbose': False
+        }
+
+        score = cross_val_score(
+            model,
+            self.x_train,
+            self.y_train,
+            scoring=self.scoring,
+            cv=StratifiedKFold(5),
+            fit_params=early_stopping
+        ).mean()
+
+        return {'loss': -score, 'status': hyperopt.STATUS_OK}
+
+    def __cat_oos(self, params):
+        
+        params = self.parameters.param_transformer(params)
+
+        model = CatBoostClassifier(
+            loss_function='Logloss',
+            eval_metric='AUC',
+            random_seed=self.random_seed,
+            max_ctr_complexity=1,
+            cat_features=self.cat_features,
+            **params
+        )
+
+        early_stopping = {
+            'early_stopping_rounds': self.early_stop,
+            'eval_set': (self.x_test, self.y_test),
+            'verbose': False
+        }
+
+        score = model.fit(
+            self.x_train,
+            self.y_train,
+            early_stopping_rounds=self.early_stop,
+            eval_set=(self.x_test, self.y_test),
+            verbose=False
+        ).best_score_['validation']['AUC']
+
+        return {'loss': -score, 'status': hyperopt.STATUS_OK}
+
+    def __train_model(self, f, params):
+
+        trials = hyperopt.Trials()
+        best_model = hyperopt.fmin(
+            fn=f,
+            space=params,
+            algo=hyperopt.tpe.suggest,
+            max_evals=self.max_evals,
+            trials=trials,
+            rstate=np.random.default_rng(self.random_seed)
+        )
+
+        best_score = -trials.best_trial['result']['loss']
+        
+        return best_model, best_score
+
+    def train(self, scoring='roc_auc', eval_metric='AUC', oos=False):
+        
+        self.scoring = scoring.lower()
+
+        if oos:
+            best_params, cv_score = self.__train_model(
+                self.__cat_oos,
+                self.parameters.params
+            )
+        else:
+            best_params, cv_score = self.__train_model(
+                self.__cat,
+                self.parameters.params
+            )
+
+        best_params = hyperopt.space_eval(
+            self.parameters.params,
+            best_params
+        )
+
+        best_params = self.parameters.param_transformer(best_params)
+
+        best_model = CatBoostClassifier(
+            eval_metric=eval_metric,
+            cat_features=self.cat_features,
+            random_seed=self.random_seed,
+            max_ctr_complexity=1,
+            **best_params
+        ).fit(
+            self.x_train,
+            self.y_train,
+            early_stopping_rounds=self.early_stop,
+            eval_set=(self.x_test, self.y_test),
+            verbose=False
+        )
+        
+        self.__plot_feature_importance(best_model, 'CatBoost')
+
+        return best_model, cv_score, best_model.best_score_['validation'][eval_metric]
 
 # --------------------------------------------------------------------------------------------------------------
