@@ -79,7 +79,7 @@ class FeatureSelector(abc.ABC):
 
 		pass
 
-	@abc.ABC
+	@abc.abstractmethod
 	def get_scores(self):
 
 		"""
