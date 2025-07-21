@@ -67,7 +67,7 @@ class CatBoostParameters(Parameters):
 # --------------------------------------------------------------------------------------------------------------
 
 class TrainCatBoostModel(TrainModel):
-	
+
     """
     Implemented catboost training pipeline.
     """
@@ -221,5 +221,178 @@ class TrainCatBoostModel(TrainModel):
         self.__plot_feature_importance(best_model, 'CatBoost')
 
         return best_model, cv_score, best_model.best_score_['validation'][eval_metric]
+
+# --------------------------------------------------------------------------------------------------------------
+
+class FeatureSelector:
+
+    """
+    Feature selector for catboost implementation.
+    """
+
+    def __init__(self, x_train, y_train,
+                 x_test, y_test, percent_drop=10,
+                 random_state=42, cat_features=None):
+
+        self.x_train = x_train
+        self.y_train = y_train
+        self.x_test = x_test
+        self.y_test = y_test
+        self.percent_drop = percent_drop
+        self.columns = x_train.columns.values
+        self.step = max(2, len(self.columns) // self.percent_drop)
+        self.model = None
+        self.feature_imp = None
+        self.removed_columns = None
+        self.left_bound = -np.Inf
+        self.right_bound = -np.Inf
+        self.random_state = random_state
+        self.cat_features = cat_features
+        self.features = []
+
+    def _shuffle_data(self):
+
+        X = pd.concat([self.x_train, self.x_test])
+        y = np.concatenate((self.y_train, self.y_test))
+
+        self.x_train, self.x_test, self.y_train, self.y_test = train_test_split(
+            X, y,
+            test_size=0.3,
+            random_state=self.random_state
+        )
+
+        return self
+
+    def get_feature_importance(self):
+
+        self.model = CatBoostClassifier(
+            loss_function='Logloss',
+            eval_metric='AUC',
+            iterations=250,
+            depth=5,
+            min_data_in_leaf=50,
+            random_seed=self.random_state,
+            max_ctr_complexity=1,
+            cat_features=list(set(self.cat_features)&set(self.columns))
+        ).fit(
+            self.x_train[self.columns],
+            self.y_train,
+            early_stopping_rounds=30,
+            eval_set=(self.x_test[self.columns], self.y_test),
+            cat_features=list(set(self.cat_features)&set(self.columns)),
+            verbose=False
+        )
+
+        self.feature_imp = sorted(zip(self.columns, self.model.feature_importances_), key=lambda x: x[1], reverse=True)
+
+        return self
+
+    def get_scores(self):
+
+        early_stopping = {
+            'early_stopping_rounds': 30,
+            'eval_set': (self.x_test[self.columns], self.y_test),
+            'verbose': False
+        }
+
+        score = cross_val_score(
+            self.model,
+            self.x_train[self.columns],
+            self.y_train,
+            scoring='roc_auc',
+            cv=StratifiedKFold(5),
+            fit_params=early_stopping
+        )
+
+        left_bound = round(score.mean() - 2 * score.std(), 2)
+        right_bound = round(score.mean() + 2 * score.std(), 2)
+
+        return left_bound, right_bound
+
+    def _remove_columns(self):
+
+        self.removed_columns = [
+            col[0] for col in self.feature_imp[(len(self.feature_imp) - self.step):]
+        ]
+
+        self.columns = [
+            col[0] for col in self.feature_imp[:(len(self.feature_imp) - self.step)]
+        ]
+
+        return self
+
+    def backward_selector(self, allowed_decrease=0):
+
+        self.get_feature_importance()
+        
+        left_bound, right_bound = self.get_scores()
+        self.step = max(2, len(self.columns) // self.percent_drop)
+        left_new = left_bound * (1 + allowed_decrease)
+        right_new = right_bound * (1 + allowed_decrease)
+        print(left_bound, right_bound, left_new, right_new, self.left_bound, self.right_bound)
+
+        if ((left_new >= self.left_bound) & (right_new >= self.right_bound)):
+
+            self.left_bound = left_bound
+            self.right_bound = right_bound
+            self.features.append(self.columns)
+            self._remove_columns()
+            print(f'Columns remaining {len(self.columns)}')
+            return self.backward_selector(allowed_decrease)
+
+        else:
+            self.columns = np.concatenate((self.columns, self.removed_columns))
+            return self.feature_stability(allowed_decrease)
+
+    def feature_stability(self, allowed_decrease=0):
+    	
+        # стабильность по тому, как меняется номер фичи при вычислении feature importance
+        print('Starting feature stability testing')
+
+        feature_importance_stability = {}
+
+        for rs in tqdm.tqdm(range(10), total=10):
+            
+            self.random_state = rs
+            self._shuffle_data()
+            self.get_feature_importance()
+
+            for i, value in enumerate(self.feature_imp, start=1):
+
+                if value[0] in feature_importance_stability:
+                    feature_importance_stability[value[0]].append(i)
+                else:
+                    feature_importance_stability[value[0]] = [i]
+
+        bad_cols = []
+
+        for col in feature_importance_stability:
+
+            if (max(feature_importance_stability[col]) - min(feature_importance_stability[col])) / len(feature_importance_stability) >= 0.4:
+               bad_cols.append(col)
+
+        print(f'{len(bad_cols)} potential columns to drop')
+
+        if len(bad_cols) > 0:
+
+            self.columns = [
+                col for col in self.columns
+                if col not in bad_cols
+            ]
+
+            left_bound, right_bound = self.get_scores()
+            left_new = left_bound * (1 + allowed_decrease)
+            right_new = right_bound * (1 + allowed_decrease)
+            print(left_bound, right_bound, left_new, right_new, self.left_bound, self.right_bound)
+
+            if ((left_new >= self.left_bound) & (right_new >= self.right_bound)):
+                print('Bad columns was drop')
+                return self.columns, self.features
+            else:
+                print('Not stable columns is not bad')
+                return np.concatenate((self.columns, np.array(bad_cols))), self.features
+
+        else:
+            return self.columns, self.features
 
 # --------------------------------------------------------------------------------------------------------------
