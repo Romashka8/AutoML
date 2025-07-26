@@ -224,7 +224,7 @@ class TrainCatBoostModel(TrainModel):
 
 # --------------------------------------------------------------------------------------------------------------
 
-class FeatureSelector:
+class FeatureSelector(FeatureSelector):
 
     """
     Feature selector for catboost implementation.
