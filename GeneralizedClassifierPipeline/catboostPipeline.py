@@ -9,10 +9,9 @@ import os
 import pandas as pd
 import numpy as np
 
-from catboost import CatBoostClassifier, Pool
+from catboost import CatBoostClassifier
 
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.metrics import roc_auc_score
 
 import hyperopt
 
@@ -86,7 +85,7 @@ class TrainCatBoostModel(TrainModel):
         self.scoring = None
         self.type_model = None
         self.max_evals = max_evals
-        self.cat_features = cat_features
+        self.cat_features = cat_features or []
         self.random_seed = random_seed
 
     def __plot_feature_importance(self, model, model_name):
@@ -95,18 +94,18 @@ class TrainCatBoostModel(TrainModel):
             col_names = self.x_train.columns.values
         else:
             col_names = [f'col_{i}' for i in range(self.x_train.shape[1])]
-            
-            feature_imp = pd.DataFrame(
-                sorted(zip(model.feature_importances_, col_names)),
-                columns=['Value', 'Feature']
-            )
 
-            plt.figure(figsize=(10, 10))
-            sns.barplot(x='Value', y='Feature',
-                        data=feature_imp.sort_values(by='Value', ascending=False),
-                        palette='magma'
-            )
-            plt.title(f'{model_name} importance of features')
+        feature_imp = pd.DataFrame(
+            sorted(zip(model.feature_importances_, col_names)),
+            columns=['Value', 'Feature']
+        )
+
+        plt.figure(figsize=(10, 10))
+        sns.barplot(x='Value', y='Feature',
+                    data=feature_imp.sort_values(by='Value', ascending=False),
+                    palette='magma'
+        )
+        plt.title(f'{model_name} importance of features')
 
     def __cat(self, params):
         
@@ -120,19 +119,12 @@ class TrainCatBoostModel(TrainModel):
             **params
         )
 
-        early_stopping = {
-            'early_stopping_rounds': self.early_stop,
-            'eval_set': (self.x_test, self.y_test),
-            'verbose': False
-        }
-
         score = cross_val_score(
             model,
             self.x_train,
             self.y_train,
             scoring=self.scoring,
-            cv=StratifiedKFold(5),
-            fit_params=early_stopping
+            cv=StratifiedKFold(5, shuffle=True, random_state=self.random_state)
         ).mean()
 
         return {'loss': -score, 'status': hyperopt.STATUS_OK}
@@ -149,12 +141,6 @@ class TrainCatBoostModel(TrainModel):
             cat_features=self.cat_features,
             **params
         )
-
-        early_stopping = {
-            'early_stopping_rounds': self.early_stop,
-            'eval_set': (self.x_test, self.y_test),
-            'verbose': False
-        }
 
         score = model.fit(
             self.x_train,
@@ -239,15 +225,15 @@ class FeatureSelector(FeatureSelector):
         self.x_test = x_test
         self.y_test = y_test
         self.percent_drop = percent_drop
-        self.columns = x_train.columns.values
+        self.columns = x_train.columns.values if hasattr(x_train, 'columns') else np.array([f'col_{i}' for i in range(x_train.shape[1])])
         self.step = max(2, len(self.columns) // self.percent_drop)
         self.model = None
         self.feature_imp = None
         self.removed_columns = None
-        self.left_bound = -np.Inf
-        self.right_bound = -np.Inf
+        self.left_bound = -np.inf
+        self.right_bound = -np.inf
         self.random_state = random_state
-        self.cat_features = cat_features
+        self.cat_features = cat_features or []
         self.features = []
 
     def _shuffle_data(self):
@@ -273,7 +259,7 @@ class FeatureSelector(FeatureSelector):
             min_data_in_leaf=50,
             random_seed=self.random_state,
             max_ctr_complexity=1,
-            cat_features=list(set(self.cat_features)&set(self.columns))
+            cat_features=list(set(self.cat_features) & set(self.columns))
         ).fit(
             self.x_train[self.columns],
             self.y_train,
@@ -300,8 +286,7 @@ class FeatureSelector(FeatureSelector):
             self.x_train[self.columns],
             self.y_train,
             scoring='roc_auc',
-            cv=StratifiedKFold(5),
-            fit_params=early_stopping
+            cv=StratifiedKFold(5, shuffle=True, random_state=self.random_seed)
         )
 
         left_bound = round(score.mean() - 2 * score.std(), 2)
