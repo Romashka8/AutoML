@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 
 from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.metrics import roc_auc_score
@@ -32,7 +33,7 @@ class LogisticRegressionParameters(Parameters):
         if params_dict is None:
 
             self.params = {
-                'penalty': hyperopt.hp.choice('penalty', ['l1', 'l2', 'elasticnet', 'none']),
+                'penalty': hyperopt.hp.choice('penalty', ['l1', 'l2', 'elasticnet', None]),
                 'C': hyperopt.hp.uniform('C', 0.01, 10),
                 'solver': hyperopt.hp.choice('solver', ['newton-cg', 'lbfgs', 'liblinear', 'saga']),
                 'max_iter': hyperopt.hp.uniformint('max_iter', 100, 500),
@@ -51,15 +52,27 @@ class LogisticRegressionParameters(Parameters):
 
     def param_transformer(self, params):
         
+        penalty = params['penalty']
+        solver = params['solver']
+
+        if penalty == 'elasticnet':
+            solver = 'saga'
+            l1_ratio = round(params.get('l1_ratio', 0.5), 3)
+        else:
+            l1_ratio = None
+            if penalty == 'l1' and solver not in ['liblinear', 'saga']:
+                solver = 'liblinear'
+            elif penalty is None and solver == 'liblinear':
+                solver = 'lbfgs'
+
         transformed = {
-            'penalty': params['penalty'],
+            'penalty': penalty,
             'C': round(params['C'], 3),
-            'solver': params['solver'],
+            'solver': solver,
             'max_iter': int(params['max_iter']),
-            'l1_ratio': round(params.get('l1_ratio', None), 3) if 'l1_ratio' in params else None
+            'l1_ratio': l1_ratio
         }
-        
-        # Remove None values
+
         return {k: v for k, v in transformed.items() if v is not None}
 
 # --------------------------------------------------------------------------------------------------------------
@@ -122,27 +135,21 @@ class TrainLogisticRegressionModel(TrainModel):
 
         params = self.parameters.param_transformer(params)
         
-        # Handle incompatible parameter combinations
-        if params['penalty'] == 'elasticnet' and params['solver'] != 'saga':
-            params['solver'] = 'saga'
-        elif params['penalty'] == 'l1' and params['solver'] not in ['liblinear', 'saga']:
-            params['solver'] = 'liblinear'
-        elif params['penalty'] == 'none':
-            params.pop('penalty', None)
-        
-        model = LogisticRegression(
+        estimator = LogisticRegression(
             random_state=self.random_seed,
             **params
         )
+        model = Pipeline([
+            ('scaler', StandardScaler()),
+            ('model', estimator)
+        ]) if self.scale_data else estimator
 
-        X_train_scaled = self.__scale_data(self.x_train)
-        
         score = cross_val_score(
             model,
-            X_train_scaled,
+            self.x_train,
             self.y_train,
             scoring=self.scoring,
-            cv=StratifiedKFold(5)
+            cv=StratifiedKFold(5, shuffle=True, random_state=self.random_seed)
         ).mean()
 
         return {'loss': -score, 'status': hyperopt.STATUS_OK}
@@ -177,7 +184,7 @@ class TrainLogisticRegressionModel(TrainModel):
         )
 
         best_params = self.parameters.param_transformer(best_params)
-        
+
         # Final model training
         X_train_scaled, X_test_scaled = self.__scale_data(self.x_train, self.x_test)
         
@@ -213,8 +220,8 @@ class FeatureSelectorLR(FeatureSelector):
         self.model = None
         self.feature_imp = None
         self.removed_columns = None
-        self.left_bound = -np.Inf
-        self.right_bound = -np.Inf
+        self.left_bound = -np.inf
+        self.right_bound = -np.inf
         self.random_state = random_state
         self.scale_data = scale_data
         self.scaler = StandardScaler() if scale_data else None
@@ -233,10 +240,12 @@ class FeatureSelectorLR(FeatureSelector):
 
         return self
 
-    def __scale_data(self, X):
+    def __scale_data(self, X, fit=True):
 
         if self.scale_data:
-            return self.scaler.fit_transform(X)
+            if fit:
+                return self.scaler.fit_transform(X)
+            return self.scaler.transform(X)
         return X
 
     def get_feature_importance(self):
@@ -258,14 +267,14 @@ class FeatureSelectorLR(FeatureSelector):
     def get_scores(self):
 
         X_train_scaled = self.__scale_data(self.x_train)
-        X_test_scaled = self.__scale_data(self.x_test)
+        X_test_scaled = self.__scale_data(self.x_test, fit=False)
         
         score = cross_val_score(
             self.model,
             X_train_scaled,
             self.y_train,
             scoring='roc_auc',
-            cv=StratifiedKFold(5)
+            cv=StratifiedKFold(5, shuffle=True, random_state=self.random_state)
         )
 
         left_bound = round(score.mean() - 2 * score.std(), 2)
@@ -288,7 +297,7 @@ class FeatureSelectorLR(FeatureSelector):
             self.x_train = self.x_train[self.columns]
             self.x_test = self.x_test[self.columns]
         else:
-            col_indices = [i for i, col in enumerate(self.columns) if col in self.columns]
+            col_indices = [int(str(col).replace('col_', '')) for col in self.columns]
             self.x_train = self.x_train[:, col_indices]
             self.x_test = self.x_test[:, col_indices]
 
@@ -387,8 +396,8 @@ class FeatureSelectorLR(FeatureSelector):
                         random_state=self.random_state
                     )
                     
-                    # Scale data
-                    X_train = self.__scale_data(train_set[current_features])
+                    # Scale data: fit scaler on train only, reuse it for validation/test.
+                    X_train = self.__scale_data(train_set[current_features], fit=True)
                     model.fit(X_train, train_set[target])
                     
                     metrics = []
@@ -397,7 +406,7 @@ class FeatureSelectorLR(FeatureSelector):
                         ['Train', 'Val', 'Val1', 'Test']
                     ):
                         if dataset is not None:
-                            X = self.__scale_data(dataset[current_features])
+                            X = self.__scale_data(dataset[current_features], fit=False)
                             predictions = model.predict_proba(X)[:, 1]
                             auc = roc_auc_score(dataset[target].values, predictions)
                             metrics.append(auc)
